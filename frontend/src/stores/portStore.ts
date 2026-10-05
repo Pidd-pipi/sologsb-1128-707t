@@ -5,6 +5,18 @@ import { toPlain, uid } from '../utils/format';
 import { emptyPortFilter, type FishingPort, type PortFilter, type SupplyCapability } from '../types/port';
 import type { Berth, BerthStatus } from '../types/berth';
 import type { CallDraft, PortCall } from '../types/call';
+import type { StorageBatch, StorageLedger, StoragePickup, StorageSummary } from '../types/storage';
+import {
+  registerInboundCall,
+  registerOutboundCall,
+  registerPickup,
+  summarizeStorage,
+  updateLedgerCapacity,
+  type PickupParams,
+  type PickupResult,
+  type RegisterCallParams,
+  type RegisterCallResult,
+} from '../db/storage';
 import { buildBerthRecords } from '../db/berth';
 
 export interface PortInput {
@@ -16,14 +28,21 @@ export interface PortInput {
   berthDepth: number;
   wharfLength: number;
   shelterLevel: number;
+  coldStorageKg: number;
   supply: SupplyCapability;
   manager: string;
 }
+
+/** 跨标签页 / 终端的数据同步频道名 */
+const SYNC_CHANNEL = 'gbfishport:sync';
 
 export const usePortStore = defineStore('port', () => {
   const ports = ref<FishingPort[]>([]);
   const berths = ref<Berth[]>([]);
   const calls = ref<PortCall[]>([]);
+  const ledgers = ref<StorageLedger[]>([]);
+  const batches = ref<StorageBatch[]>([]);
+  const pickups = ref<StoragePickup[]>([]);
   const loading = ref(false);
   const filter = ref<PortFilter>(emptyPortFilter());
 
@@ -42,6 +61,9 @@ export const usePortStore = defineStore('port', () => {
     [...calls.value].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()),
   );
 
+  /** 旧流水没有港口归属（portId 为 null）→ 待盘点，不占冷库、不进任何港口流水 */
+  const pendingCalls = computed(() => callsSorted.value.filter((c) => !c.portId));
+
   function portById(id: string): FishingPort | undefined {
     return ports.value.find((p) => p.id === id);
   }
@@ -50,8 +72,52 @@ export const usePortStore = defineStore('port', () => {
     return berths.value.filter((b) => b.portId === portId).sort((a, b) => a.berthNo.localeCompare(b.berthNo));
   }
 
+  function callsOfPort(portId: string): PortCall[] {
+    return callsSorted.value.filter((c) => c.portId === portId);
+  }
+
   function callsOfVessel(vesselId: string): PortCall[] {
     return callsSorted.value.filter((c) => c.vesselId === vesselId);
+  }
+
+  function ledgerOf(portId: string): StorageLedger | undefined {
+    return ledgers.value.find((l) => l.portId === portId);
+  }
+
+  /** 统一库存出口：渔港详情、地图摘要、渔船档案都读这一份 */
+  function storageOf(portId: string): StorageSummary | null {
+    const ledger = ledgerOf(portId);
+    const summary = summarizeStorage(ledger);
+    if (!summary) return null;
+    summary.batchCount = batches.value.filter((b) => b.portId === portId && b.status === '在库').length;
+    return summary;
+  }
+
+  function batchesOfPort(portId: string): StorageBatch[] {
+    return batches.value
+      .filter((b) => b.portId === portId)
+      .sort((a, b) => new Date(b.storedAt).getTime() - new Date(a.storedAt).getTime());
+  }
+
+  function batchById(id: string): StorageBatch | undefined {
+    return batches.value.find((b) => b.id === id);
+  }
+
+  function batchOfCall(callId: string): StorageBatch | undefined {
+    return batches.value.find((b) => b.callId === callId);
+  }
+
+  /** 某渔船在某渔港尚未提完的冷库批次（出港前提示、渔船档案展示用） */
+  function activeBatchesOfVessel(vesselId: string, portId?: string): StorageBatch[] {
+    return batches.value
+      .filter((b) => b.status === '在库' && b.vesselId === vesselId && (!portId || b.portId === portId))
+      .sort((a, b) => new Date(b.storedAt).getTime() - new Date(a.storedAt).getTime());
+  }
+
+  function pickupsOfBatch(batchId: string): StoragePickup[] {
+    return pickups.value
+      .filter((p) => p.batchId === batchId)
+      .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
   }
 
   function resetFilter(): void {
@@ -61,12 +127,53 @@ export const usePortStore = defineStore('port', () => {
   async function loadAll(): Promise<void> {
     loading.value = true;
     try {
-      const [p, b, c] = await Promise.all([db.ports.toArray(), db.berths.toArray(), db.calls.toArray()]);
+      const [p, b, c, l, sb, pk] = await Promise.all([
+        db.ports.toArray(),
+        db.berths.toArray(),
+        db.calls.toArray(),
+        db.storageLedgers.toArray(),
+        db.storageBatches.toArray(),
+        db.storagePickups.toArray(),
+      ]);
       ports.value = p;
       berths.value = b;
       calls.value = c;
+      ledgers.value = l;
+      batches.value = sb;
+      pickups.value = pk;
     } finally {
       loading.value = false;
+    }
+  }
+
+  /** 写完数据后通知本页其他模块与其他标签页重读同一份库存 */
+  function notifySync(): void {
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        syncChannel.postMessage({ at: Date.now() });
+      } catch {
+        // 跨源或通道关闭时忽略
+      }
+    }
+  }
+
+  const syncChannel =
+    typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(SYNC_CHANNEL) : (null as unknown as BroadcastChannel);
+
+  function startSyncListener(): void {
+    if (syncChannel) {
+      syncChannel.onmessage = () => {
+        void loadAll();
+      };
+    }
+    // 不支持 BroadcastChannel 时退回 storage 事件（同机不同标签页 localStorage 桥）
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', (event) => {
+        if (event.key && event.key.startsWith('gbfishport:')) void loadAll();
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) void loadAll();
+      });
     }
   }
 
@@ -81,16 +188,41 @@ export const usePortStore = defineStore('port', () => {
       berthDepth: Number(input.berthDepth),
       wharfLength: Number(input.wharfLength),
       shelterLevel: Number(input.shelterLevel),
+      coldStorageKg: Number(input.coldStorageKg) || 0,
       supply: { ...input.supply },
       manager: input.manager.trim(),
       createdAt: new Date().toISOString(),
     };
-    // 写库前脱代理，避免 DataCloneError
-    await db.ports.put(toPlain(port));
-    const records = buildBerthRecords(port, []);
-    await db.berths.bulkPut(toPlain(records));
+    // 港口、泊位、冷库台账在一笔事务里建立
+    await db.transaction('rw', [db.ports, db.berths, db.storageLedgers], async () => {
+      await db.ports.put(toPlain(port));
+      const records = buildBerthRecords(port, []);
+      await db.berths.bulkPut(toPlain(records));
+      await db.storageLedgers.put(
+        toPlain({
+          portId: port.id,
+          portName: port.name,
+          capacityKg: port.coldStorageKg,
+          usedKg: 0,
+          version: 0,
+          updatedAt: new Date().toISOString(),
+        } satisfies StorageLedger),
+      );
+      berths.value = [...berths.value, ...records];
+    });
     ports.value = [...ports.value, port];
-    berths.value = [...berths.value, ...records];
+    ledgers.value = [
+      ...ledgers.value,
+      {
+        portId: port.id,
+        portName: port.name,
+        capacityKg: port.coldStorageKg,
+        usedKg: 0,
+        version: 0,
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+    notifySync();
     return port;
   }
 
@@ -131,79 +263,90 @@ export const usePortStore = defineStore('port', () => {
     };
     await db.berths.put(toPlain(next));
     berths.value = berths.value.map((b) => (b.id === berthId ? next : b));
+    notifySync();
   }
 
   async function updatePort(portId: string, patch: Partial<FishingPort>): Promise<void> {
     const hit = portById(portId);
     if (!hit) return;
     const next: FishingPort = { ...hit, ...patch };
-    await db.ports.put(toPlain(next));
+    if ('coldStorageKg' in patch) {
+      // 容量变更必须同步台账并推进版本号，使进行中的并发登记失败
+      await updateLedgerCapacity(next);
+      const ledger = await db.storageLedgers.get(portId);
+      if (ledger) ledgers.value = ledgers.value.map((l) => (l.portId === portId ? ledger : l));
+    } else {
+      await db.ports.put(toPlain(next));
+    }
     ports.value = ports.value.map((p) => (p.id === portId ? next : p));
+    notifySync();
   }
 
   /**
-   * 登记一条进出港记录，并同步泊位占用状态（进港 → 占用，出港 → 释放）。
+   * 登记进出港：流水、泊位占用、冷库占用 / 版本号在同一笔事务里提交。
+   * 容量不足或并发冲突时整笔拒绝（错误类型见 db/errors），由页面展示缺口与最新余量。
    */
-  async function registerCall(draft: CallDraft, vesselName: string, portId: string): Promise<PortCall> {
-    const call: PortCall = {
-      id: uid('c'),
-      vesselId: draft.vesselId,
-      vesselName,
-      type: draft.type,
-      time: draft.time ? new Date(draft.time).toISOString() : new Date().toISOString(),
-      berthNo: draft.berthNo,
-      iceKg: Number(draft.iceKg) || 0,
-      fuelL: Number(draft.fuelL) || 0,
-      unloadKg: Number(draft.unloadKg) || 0,
-      visaStatus: draft.visaStatus,
-      createdAt: new Date().toISOString(),
-    };
-    await db.calls.put(toPlain(call));
-    calls.value = [...calls.value, call];
+  async function registerCall(params: RegisterCallParams): Promise<RegisterCallResult> {
+    const result =
+      params.draft.type === '进港' ? await registerInboundCall(params) : await registerOutboundCall(params);
+    await loadAll();
+    notifySync();
+    return result;
+  }
 
-    const berth = berths.value.find((b) => b.portId === portId && b.berthNo === draft.berthNo);
-    if (berth) {
-      const next: Berth =
-        draft.type === '进港'
-          ? {
-              ...berth,
-              status: '占用',
-              vesselId: draft.vesselId,
-              vesselName,
-              berthAt: call.time,
-              leaveAt: null,
-            }
-          : {
-              ...berth,
-              status: '空闲',
-              vesselId: null,
-              vesselName: null,
-              berthAt: null,
-              leaveAt: call.time,
-            };
-      await db.berths.put(toPlain(next));
-      berths.value = berths.value.map((b) => (b.id === berth.id ? next : b));
-    }
-    return call;
+  /** 渔船提货出库：按批次核减并立即释放容量（同事务）。 */
+  async function pickup(params: PickupParams): Promise<PickupResult> {
+    const result = await registerPickup(params);
+    await loadAll();
+    notifySync();
+    return result;
+  }
+
+  /**
+   * 盘点旧流水：把没有港口归属的流水人工归档到具体渔港。
+   * 只补归属用于展示，绝不追溯占用冷库容量。
+   */
+  async function assignPendingCall(callId: string, portId: string): Promise<void> {
+    const hit = calls.value.find((c) => c.id === callId);
+    if (!hit || hit.portId) return;
+    const next: PortCall = { ...hit, portId };
+    await db.calls.put(toPlain(next));
+    calls.value = calls.value.map((c) => (c.id === callId ? next : c));
+    notifySync();
   }
 
   return {
     ports,
     berths,
     calls,
+    ledgers,
+    batches,
+    pickups,
     loading,
     filter,
     filteredPorts,
     callsSorted,
+    pendingCalls,
     portById,
     berthsOf,
+    callsOfPort,
     callsOfVessel,
+    ledgerOf,
+    storageOf,
+    batchesOfPort,
+    batchById,
+    batchOfCall,
+    activeBatchesOfVessel,
+    pickupsOfBatch,
     resetFilter,
     loadAll,
+    startSyncListener,
     createPort,
     addBerth,
     setBerthStatus,
     updatePort,
     registerCall,
+    pickup,
+    assignPendingCall,
   };
 });

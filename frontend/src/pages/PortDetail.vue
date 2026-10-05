@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { usePortStore } from '../stores/portStore';
 import { useVesselStore } from '../stores/vesselStore';
 import { useBerthStatus } from '../hooks/useBerthStatus';
 import PortCard from '../components/common/PortCard.vue';
 import BerthGrid from '../components/common/BerthGrid.vue';
 import MapPanel from '../components/common/MapPanel.vue';
+import StorageCard from '../components/common/StorageCard.vue';
 import EmptyState from '../components/common/EmptyState.vue';
 import type { Berth } from '../types/berth';
 import { formatDateTime, formatNumber, percentText } from '../utils/format';
@@ -36,10 +37,14 @@ const activeVessel = computed(() =>
 const addBerthVisible = ref(false);
 const addBerthForm = reactive({ berthNo: '', designDepth: 4.5 });
 
-const recentCalls = computed(() => {
-  const numbers = new Set(portBerths.value.map((b) => b.berthNo));
-  return portStore.callsSorted.filter((c) => numbers.has(c.berthNo)).slice(0, 8);
-});
+const recentCalls = computed(() => portStore.callsOfPort(portId.value).slice(0, 8));
+
+const storage = computed(() => portStore.storageOf(portId.value));
+
+/** 地图节点读同一份冷库台账 */
+const storageByPort = computed<Record<string, ReturnType<typeof portStore.storageOf>>>(() =>
+  Object.fromEntries(portStore.ports.map((p) => [p.id, portStore.storageOf(p.id)])),
+);
 
 const supply = computed(() => (port.value ? supplyText(port.value.supply) : '—'));
 
@@ -53,6 +58,24 @@ async function bootstrap(): Promise<void> {
 
 onMounted(bootstrap);
 watch(portId, bootstrap);
+
+async function editColdStorage(): Promise<void> {
+  if (!port.value) return;
+  try {
+    const { value } = await ElMessageBox.prompt('请输入冷库容量（kg）', '调整冷库容量', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: String(port.value.coldStorageKg),
+      inputPattern: /^\d+$/,
+      inputErrorMessage: '请输入非负整数',
+    });
+    const capacity = Number(value);
+    await portStore.updatePort(port.value.id, { coldStorageKg: capacity });
+    ElMessage.success(`冷库容量已调整为 ${formatNumber(capacity, 0)} kg，台账版本已推进`);
+  } catch {
+    // 用户取消
+  }
+}
 
 function openBerth(berth: Berth): void {
   activeBerthId.value = berth.id;
@@ -117,6 +140,7 @@ function onMapSelect(selectedPortId: string): void {
         </div>
         <div class="page__head-actions">
           <el-button data-testid="open-berth-dialog" @click="addBerthVisible = true">新增泊位</el-button>
+          <el-button data-testid="edit-cold-storage" @click="editColdStorage">调整冷库容量</el-button>
           <el-button type="primary" @click="router.push('/calls')">登记进出港</el-button>
         </div>
       </header>
@@ -134,12 +158,20 @@ function onMapSelect(selectedPortId: string): void {
               <el-descriptions-item label="泊位水深">{{ formatNumber(port.berthDepth) }} m</el-descriptions-item>
               <el-descriptions-item label="码头长度">{{ formatNumber(port.wharfLength, 0) }} m</el-descriptions-item>
               <el-descriptions-item label="避风能力">{{ port.shelterLevel }} 级</el-descriptions-item>
+              <el-descriptions-item label="冷库容量">{{ formatNumber(port.coldStorageKg, 0) }} kg</el-descriptions-item>
               <el-descriptions-item label="补给能力">{{ supply }}</el-descriptions-item>
             </el-descriptions>
             <p class="detail-hint">
               当前占用率 {{ percentText(summary.occupancyRate) }}（占用 {{ summary.occupied }} / 空闲 {{ summary.free }} / 维修 {{ summary.maintenance }}）
             </p>
+            <p v-if="storage" class="detail-hint">
+              冷库已占用 {{ formatNumber(storage.usedKg, 0) }} / {{ formatNumber(storage.capacityKg, 0) }} kg ·
+              余量 <b :class="{ 'is-warn': storage.freeKg <= 0 }">{{ formatNumber(storage.freeKg, 0) }} kg</b> ·
+              在库批次 {{ storage.batchCount }}
+            </p>
           </el-card>
+
+          <StorageCard :port-id="port.id" data-testid="port-storage-card" />
         </el-col>
 
         <el-col :lg="14" :md="24">
@@ -148,6 +180,7 @@ function onMapSelect(selectedPortId: string): void {
             <MapPanel
               :ports="portStore.ports"
               :berths="portStore.berths"
+              :storage-by-port="storageByPort"
               :focused-port-id="port.id"
               :height="300"
               @select-port="onMapSelect"
@@ -311,5 +344,8 @@ function onMapSelect(selectedPortId: string): void {
   margin: 10px 0 0;
   font-size: 12px;
   color: #6b7c8c;
+}
+.detail-hint b.is-warn {
+  color: #f56c6c;
 }
 </style>

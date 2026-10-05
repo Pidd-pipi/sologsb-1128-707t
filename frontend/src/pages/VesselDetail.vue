@@ -31,6 +31,22 @@ const occupancy = computed(() => {
     }));
 });
 
+/** 该船尚未提完的冷库批次（与渔港详情、地图读同一份库存） */
+const cargoInStore = computed(() => {
+  if (!vessel.value) return [] as Array<{ portId: string; portName: string; remainingKg: number; inflowKg: number; storedAt: string }>;
+  return portStore
+    .activeBatchesOfVessel(vessel.value.id)
+    .map((b) => ({
+      portId: b.portId,
+      portName: portStore.portById(b.portId)?.name ?? b.portId,
+      remainingKg: b.inflowKg - b.pickedKg,
+      inflowKg: b.inflowKg,
+      storedAt: b.storedAt,
+    }));
+});
+
+const cargoTotalKg = computed(() => cargoInStore.value.reduce((sum, c) => sum + c.remainingKg, 0));
+
 const expiryDays = computed(() => (vessel.value ? daysUntilExpiry(vessel.value.certificateExpiry) : Number.NaN));
 
 const expiryTagType = computed(() => {
@@ -106,7 +122,27 @@ watch(vesselId, bootstrap);
                 {{ formatNumber(totals.ice, 0) }} kg / {{ formatNumber(totals.fuel, 0) }} L
               </el-descriptions-item>
               <el-descriptions-item label="累计卸货">{{ formatNumber(totals.unload, 0) }} kg</el-descriptions-item>
+              <el-descriptions-item label="冷库在库货物">
+                <b :class="{ 'cargo-warn': cargoTotalKg > 0 }">{{ formatNumber(cargoTotalKg, 0) }} kg</b>
+                （{{ cargoInStore.length }} 批，提货后才释放容量）
+              </el-descriptions-item>
             </el-descriptions>
+          </el-card>
+
+          <el-card shadow="never" class="detail-card">
+            <template #header><span class="card-title">冷库在库货物（{{ cargoInStore.length }} 批）</span></template>
+            <el-table :data="cargoInStore" size="small" border empty-text="该船当前没有未提走的冷库货物" data-testid="vessel-cargo">
+              <el-table-column prop="portName" label="所在渔港" min-width="130" />
+              <el-table-column label="入库时间" min-width="150">
+                <template #default="scope">{{ formatDateTime(scope.row.storedAt) }}</template>
+              </el-table-column>
+              <el-table-column label="入库 kg" width="100">
+                <template #default="scope">{{ formatNumber(scope.row.inflowKg, 0) }}</template>
+              </el-table-column>
+              <el-table-column label="未提 kg" width="100">
+                <template #default="scope"><b>{{ formatNumber(scope.row.remainingKg, 0) }}</b></template>
+              </el-table-column>
+            </el-table>
           </el-card>
 
           <el-card shadow="never" class="detail-card">
@@ -134,10 +170,12 @@ watch(vesselId, bootstrap);
           >
             <div class="timeline-row">
               <el-tag size="small" :type="call.type === '进港' ? 'primary' : 'success'">{{ call.type }}</el-tag>
+              <span>{{ portStore.portById(call.portId ?? '')?.name ?? '' }}</span>
               <span>泊位 {{ call.berthNo }}</span>
               <span>加冰 {{ formatNumber(call.iceKg, 0) }} kg</span>
               <span>加油 {{ formatNumber(call.fuelL, 0) }} L</span>
-              <span>卸货 {{ formatNumber(call.unloadKg, 0) }} kg</span>
+              <span v-if="call.type === '进港'">卸货 {{ formatNumber(call.unloadKg, 0) }} kg</span>
+              <el-tag v-if="!call.portId" size="small" type="warning" effect="plain">待盘点</el-tag>
               <el-tag size="small" type="info" effect="plain">{{ call.visaStatus }}</el-tag>
             </div>
           </el-timeline-item>
@@ -197,5 +235,8 @@ watch(vesselId, bootstrap);
   flex-wrap: wrap;
   font-size: 13px;
   color: #4b5c6d;
+}
+.cargo-warn {
+  color: #e6a23c;
 }
 </style>

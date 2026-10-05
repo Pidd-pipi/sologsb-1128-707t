@@ -11,6 +11,11 @@ export const VISA_STATUSES: VisaStatus[] = ['已签证', '待签证', '免签'];
 /** 进出港记录 */
 export interface PortCall {
   id: string;
+  /**
+   * 所属渔港 id。
+   * 旧流水没有港口归属时为 null（或缺失），统一列为「待盘点」，不自动占用冷库。
+   */
+  portId: string | null;
   /** 渔船 id */
   vesselId: string;
   /** 渔船名（冗余，便于流水展示） */
@@ -25,8 +30,10 @@ export interface PortCall {
   iceKg: number;
   /** 加油 L */
   fuelL: number;
-  /** 卸货量 kg */
+  /** 卸货量 kg（进港时对应冷库入库批次，出港不清冷库） */
   unloadKg: number;
+  /** 进港卸货生成的冷库批次 id；旧流水 / 待盘点流水为 null */
+  batchId: string | null;
   /** 签证状态 */
   visaStatus: VisaStatus;
   createdAt: string;

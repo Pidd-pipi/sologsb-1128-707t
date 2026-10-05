@@ -29,6 +29,8 @@ export interface FishingPort {
   wharfLength: number;
   /** 避风能力（级） */
   shelterLevel: number;
+  /** 冷库容量 kg */
+  coldStorageKg: number;
   /** 补给能力 */
   supply: SupplyCapability;
   /** 管理单位 */

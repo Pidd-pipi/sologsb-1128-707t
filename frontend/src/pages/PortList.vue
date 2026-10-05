@@ -38,6 +38,7 @@ function emptyForm(): PortInput {
     berthDepth: 4.5,
     wharfLength: 220,
     shelterLevel: 10,
+    coldStorageKg: 10000,
     supply: { fuel: true, ice: true, water: false },
     manager: '',
   };
@@ -134,6 +135,7 @@ function openPort(portId: string): void {
         :key="port.id"
         :port="port"
         :summary="summaryOf(port.id)"
+        :storage="portStore.storageOf(port.id)"
         @open="openPort"
       />
     </div>
@@ -191,6 +193,17 @@ function openPort(portId: string): void {
             </el-form-item>
           </el-col>
         </el-row>
+        <el-form-item label="冷库容量 kg" prop="coldStorageKg">
+          <el-input-number
+            id="port-cold-storage"
+            v-model="form.coldStorageKg"
+            :min="0"
+            :max="500000"
+            :step="1000"
+            style="width: 100%"
+          />
+          <span class="form-hint">进港卸货占用冷库空间，容量不足的登记会被整笔拒绝</span>
+        </el-form-item>
         <el-form-item label="补给能力">
           <el-checkbox v-model="form.supply.fuel">加油</el-checkbox>
           <el-checkbox v-model="form.supply.ice">加冰</el-checkbox>
@@ -248,5 +261,10 @@ function openPort(portId: string): void {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 16px;
+}
+.form-hint {
+  margin-left: 12px;
+  font-size: 12px;
+  color: #9aa9b6;
 }
 </style>

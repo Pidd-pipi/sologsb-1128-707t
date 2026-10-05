@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue';
 import type { FishingPort } from '../../types/port';
 import type { Berth } from '../../types/berth';
+import type { StorageSummary } from '../../types/storage';
 import { useAmapLoader } from '../../hooks/useAmapLoader';
 import { useBerthStatus } from '../../hooks/useBerthStatus';
 import { boundsOf, gridLines, projectToGrid } from '../../utils/geo';
@@ -11,10 +12,12 @@ const props = withDefaults(
   defineProps<{
     ports: FishingPort[];
     berths: Berth[];
+    /** 渔港 id → 冷库库存摘要（渔港详情、地图与登记页读同一份台账） */
+    storageByPort?: Record<string, StorageSummary | null>;
     height?: number;
     focusedPortId?: string;
   }>(),
-  { height: 380, focusedPortId: '' },
+  { height: 380, focusedPortId: '', storageByPort: () => ({}) },
 );
 
 const emit = defineEmits<{
@@ -46,6 +49,7 @@ interface MapNode {
   rate: number;
   occupied: number;
   total: number;
+  freeStorage: number | null;
   focused: boolean;
 }
 
@@ -53,6 +57,7 @@ const nodes = computed<MapNode[]>(() =>
   props.ports.map((port) => {
     const pos = projectToGrid(port, bounds.value, { width: WIDTH, height: HEIGHT });
     const summary = summaryOf(port.id);
+    const storage = props.storageByPort[port.id] ?? null;
     return {
       port,
       x: pos.x,
@@ -60,6 +65,7 @@ const nodes = computed<MapNode[]>(() =>
       rate: summary.occupancyRate,
       occupied: summary.occupied,
       total: summary.total,
+      freeStorage: storage ? storage.freeKg : null,
       focused: port.id === props.focusedPortId,
     };
   }),
@@ -173,7 +179,8 @@ watch(
         <circle :cx="node.x" :cy="node.y" r="4.5" :fill="nodeColor(node.rate)" />
         <text :x="node.x" :y="node.y - 24" text-anchor="middle" class="map-panel__label">{{ node.port.name }}</text>
         <text :x="node.x" :y="node.y + 34" text-anchor="middle" class="map-panel__meta">
-          {{ node.occupied }}/{{ node.total }} 占用 {{ percentText(node.rate) }}
+          {{ node.occupied }}/{{ node.total }} 占用 {{ percentText(node.rate)
+          }}<template v-if="node.freeStorage !== null"> · 冷库余 {{ (node.freeStorage / 1000).toFixed(1) }}t</template>
         </text>
       </g>
       <text x="14" y="24" class="map-panel__caption">经纬网格（每格约 {{ ((bounds.maxLng - bounds.minLng) / 8).toFixed(2) }}° 经差）</text>

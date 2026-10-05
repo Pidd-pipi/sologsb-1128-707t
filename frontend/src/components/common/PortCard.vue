@@ -2,11 +2,13 @@
 import { computed } from 'vue';
 import { supplyText, type FishingPort } from '../../types/port';
 import type { BerthSummary } from '../../types/berth';
+import type { StorageSummary } from '../../types/storage';
 import { formatNumber, percentText } from '../../utils/format';
 
 const props = defineProps<{
   port: FishingPort;
   summary: BerthSummary;
+  storage?: StorageSummary | null;
   clickable?: boolean;
 }>();
 
@@ -33,6 +35,18 @@ const progressColor = computed(() => {
   if (rate >= 0.5) return '#409eff';
   return '#67c23a';
 });
+
+const storageColor = computed(() => {
+  const rate = props.storage?.usageRate ?? 0;
+  if (rate >= 1) return '#f56c6c';
+  if (rate >= 0.8) return '#e6a23c';
+  if (rate >= 0.5) return '#409eff';
+  return '#67c23a';
+});
+
+function storageFreeText(): string {
+  return props.storage ? `余量 ${formatNumber(props.storage.freeKg, 0)}` : '';
+}
 
 function onClick(): void {
   if (props.clickable !== false) emit('open', props.port.id);
@@ -73,9 +87,23 @@ function onClick(): void {
       />
     </div>
 
+    <div v-if="storage" class="port-card__rate port-card__rate--storage">
+      <span class="port-card__rate-label">
+        冷库占用 {{ formatNumber(storage.usedKg, 0) }} / {{ formatNumber(storage.capacityKg, 0) }} kg
+      </span>
+      <el-progress
+        :percentage="Number((storage.usageRate * 100).toFixed(1))"
+        :color="storageColor"
+        :stroke-width="12"
+        :status="storage.usageRate >= 1 ? 'exception' : undefined"
+        :format="storageFreeText"
+      />
+    </div>
+
     <div class="port-card__stats">
       <span>在港船数 <b>{{ summary.inPortCount }}</b></span>
       <span>空闲泊位 <b>{{ summary.free }}</b></span>
+      <span>冷库余量 <b :class="{ 'port-card__num--over': storage && storage.freeKg <= 0 }">{{ storage ? formatNumber(storage.freeKg, 0) : '—' }}</b></span>
       <span>维修泊位 <b>{{ summary.maintenance }}</b></span>
     </div>
 
@@ -125,6 +153,9 @@ function onClick(): void {
 .port-card__rate {
   margin-top: 14px;
 }
+.port-card__rate--storage {
+  margin-top: 10px;
+}
 .port-card__rate-label {
   display: block;
   margin-bottom: 4px;
@@ -140,6 +171,9 @@ function onClick(): void {
 }
 .port-card__stats b {
   color: #17324d;
+}
+.port-card__num--over {
+  color: #f56c6c !important;
 }
 .port-card__supply {
   display: flex;

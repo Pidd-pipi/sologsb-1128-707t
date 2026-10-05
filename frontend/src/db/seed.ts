@@ -1,6 +1,7 @@
 import type { FishingPort } from '../types/port';
 import type { FishingVessel } from '../types/vessel';
 import type { PortCall } from '../types/call';
+import type { StorageLedger } from '../types/storage';
 import { toPlain } from '../utils/format';
 import { db } from './index';
 import { buildBerthRecords } from './berth';
@@ -25,6 +26,7 @@ export const SEED_PORTS: FishingPort[] = [
     berthDepth: 5.5,
     wharfLength: 420,
     shelterLevel: 12,
+    coldStorageKg: 20000,
     supply: { fuel: true, ice: true, water: true },
     manager: '象山县渔港管理站',
     createdAt: daysAgo(420),
@@ -39,6 +41,7 @@ export const SEED_PORTS: FishingPort[] = [
     berthDepth: 6.2,
     wharfLength: 680,
     shelterLevel: 11,
+    coldStorageKg: 30000,
     supply: { fuel: true, ice: true, water: false },
     manager: '普陀区渔港服务中心',
     createdAt: daysAgo(365),
@@ -53,6 +56,7 @@ export const SEED_PORTS: FishingPort[] = [
     berthDepth: 4.8,
     wharfLength: 300,
     shelterLevel: 10,
+    coldStorageKg: 12000,
     supply: { fuel: false, ice: true, water: true },
     manager: '岱山县渔业合作社',
     createdAt: daysAgo(280),
@@ -67,6 +71,7 @@ export const SEED_PORTS: FishingPort[] = [
     berthDepth: 3.9,
     wharfLength: 210,
     shelterLevel: 9,
+    coldStorageKg: 8000,
     supply: { fuel: false, ice: false, water: true },
     manager: '温岭市石塘镇渔业服务站',
     createdAt: daysAgo(150),
@@ -167,10 +172,15 @@ export const SEED_VESSELS: FishingVessel[] = [
   },
 ];
 
-/** 初始进出港流水 */
+/**
+ * 初始进出港流水。
+ * 旧流水没有港口归属（portId 为 null），统一列为「待盘点」：不自动占用冷库，
+ * 需人工在登记页盘点归档到具体渔港后才参与港口维度统计。
+ */
 export const SEED_CALLS: PortCall[] = [
   {
     id: 'c-3001',
+    portId: null,
     vesselId: 'v-2001',
     vesselName: '浙象渔05123',
     type: '进港',
@@ -179,11 +189,13 @@ export const SEED_CALLS: PortCall[] = [
     iceKg: 1200,
     fuelL: 800,
     unloadKg: 8600,
+    batchId: null,
     visaStatus: '已签证',
     createdAt: hoursAgo(5),
   },
   {
     id: 'c-3002',
+    portId: null,
     vesselId: 'v-2005',
     vesselName: '浙象渔05288',
     type: '进港',
@@ -192,11 +204,13 @@ export const SEED_CALLS: PortCall[] = [
     iceKg: 900,
     fuelL: 1200,
     unloadKg: 12400,
+    batchId: null,
     visaStatus: '已签证',
     createdAt: hoursAgo(3),
   },
   {
     id: 'c-3003',
+    portId: null,
     vesselId: 'v-2002',
     vesselName: '浙普渔13208',
     type: '进港',
@@ -205,11 +219,13 @@ export const SEED_CALLS: PortCall[] = [
     iceKg: 600,
     fuelL: 0,
     unloadKg: 5200,
+    batchId: null,
     visaStatus: '待签证',
     createdAt: hoursAgo(2),
   },
   {
     id: 'c-3004',
+    portId: null,
     vesselId: 'v-2003',
     vesselName: '浙岱渔07156',
     type: '进港',
@@ -218,11 +234,13 @@ export const SEED_CALLS: PortCall[] = [
     iceKg: 300,
     fuelL: 260,
     unloadKg: 2100,
+    batchId: null,
     visaStatus: '免签',
     createdAt: hoursAgo(1),
   },
   {
     id: 'c-3005',
+    portId: null,
     vesselId: 'v-2004',
     vesselName: '浙岭渔09342',
     type: '出港',
@@ -231,11 +249,13 @@ export const SEED_CALLS: PortCall[] = [
     iceKg: 0,
     fuelL: 420,
     unloadKg: 0,
+    batchId: null,
     visaStatus: '已签证',
     createdAt: daysAgo(1),
   },
   {
     id: 'c-3006',
+    portId: null,
     vesselId: 'v-2006',
     vesselName: '浙普渔13566',
     type: '进港',
@@ -244,11 +264,13 @@ export const SEED_CALLS: PortCall[] = [
     iceKg: 480,
     fuelL: 300,
     unloadKg: 3600,
+    batchId: null,
     visaStatus: '已签证',
     createdAt: daysAgo(1),
   },
   {
     id: 'c-3007',
+    portId: null,
     vesselId: 'v-2001',
     vesselName: '浙象渔05123',
     type: '出港',
@@ -257,11 +279,13 @@ export const SEED_CALLS: PortCall[] = [
     iceKg: 0,
     fuelL: 950,
     unloadKg: 0,
+    batchId: null,
     visaStatus: '已签证',
     createdAt: daysAgo(2),
   },
   {
     id: 'c-3008',
+    portId: null,
     vesselId: 'v-2002',
     vesselName: '浙普渔13208',
     type: '出港',
@@ -270,14 +294,16 @@ export const SEED_CALLS: PortCall[] = [
     iceKg: 200,
     fuelL: 540,
     unloadKg: 0,
+    batchId: null,
     visaStatus: '待签证',
     createdAt: daysAgo(4),
   },
 ];
 
 /**
- * 首次进入时写入演示数据，并为缺少泊位记录的渔港补齐泊位。
+ * 首次进入时写入演示数据，并为缺少泊位记录的渔港补齐泊位、为缺少台账的渔港建立冷库台账。
  * 写库前统一 toPlain 脱代理，避免 DataCloneError。
+ * 注意：历史流水不追溯生成冷库批次，冷库初始占用为 0，避免演示数据直接超量。
  */
 export async function ensureSeedData(): Promise<void> {
   const portCount = await db.ports.count();
@@ -287,10 +313,24 @@ export async function ensureSeedData(): Promise<void> {
     await db.calls.bulkPut(toPlain(SEED_CALLS));
   }
   const ports = await db.ports.toArray();
+  const now = new Date().toISOString();
   for (const port of ports) {
     const existing = await db.berths.where('portId').equals(port.id).count();
     if (existing === 0) {
       await db.berths.bulkPut(toPlain(buildBerthRecords(port)));
+    }
+    const ledger = await db.storageLedgers.get(port.id);
+    if (!ledger) {
+      await db.storageLedgers.put(
+        toPlain({
+          portId: port.id,
+          portName: port.name,
+          capacityKg: port.coldStorageKg,
+          usedKg: 0,
+          version: 0,
+          updatedAt: now,
+        } satisfies StorageLedger),
+      );
     }
   }
 }

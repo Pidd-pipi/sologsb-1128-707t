@@ -24,15 +24,21 @@ const activePortId = ref('');
 
 const activePort = computed(() => portStore.ports.find((p) => p.id === activePortId.value));
 const activeSummary = computed(() => (activePortId.value ? summaryOf(activePortId.value) : null));
+const activeStorage = computed(() => (activePortId.value ? portStore.storageOf(activePortId.value) : null));
 const activeBerths = computed<Berth[]>(() => (activePortId.value ? portStore.berthsOf(activePortId.value) : []));
 
 const portRows = computed(() =>
   portStore.ports
     .map((port) => {
       const summary = summaryOf(port.id);
-      return { port, summary };
+      return { port, summary, storage: portStore.storageOf(port.id) };
     })
     .sort((a, b) => b.summary.occupancyRate - a.summary.occupancyRate),
+);
+
+/** 地图节点摘要：渔港 → 冷库余量（同一份台账） */
+const storageByPort = computed<Record<string, ReturnType<typeof portStore.storageOf>>>(() =>
+  Object.fromEntries(portStore.ports.map((p) => [p.id, portStore.storageOf(p.id)])),
 );
 
 const averageDistance = computed(() => {
@@ -97,6 +103,7 @@ function openPortDetail(): void {
           <MapPanel
             :ports="portStore.ports"
             :berths="portStore.berths"
+            :storage-by-port="storageByPort"
             :focused-port-id="uiStore.selectedPortId"
             :height="460"
             @select-port="onSelectPort"
@@ -125,7 +132,8 @@ function openPortDetail(): void {
                 :show-text="false"
               />
               <span class="rank-item__meta">
-                在港 {{ row.summary.inPortCount }} 艘 · 空闲 {{ row.summary.free }} 个泊位 · {{ row.port.level }}
+                在港 {{ row.summary.inPortCount }} 艘 · 空闲 {{ row.summary.free }} 个泊位 ·
+                冷库余量 {{ row.storage ? `${row.storage.freeKg.toLocaleString()} kg` : '—' }} · {{ row.port.level }}
               </span>
             </div>
           </div>
@@ -145,6 +153,15 @@ function openPortDetail(): void {
             {{ activeSummary.occupied }} / {{ activeSummary.free }}
           </el-descriptions-item>
           <el-descriptions-item label="维修泊位">{{ activeSummary.maintenance }}</el-descriptions-item>
+          <el-descriptions-item v-if="activeStorage" label="冷库容量">
+            {{ activeStorage.capacityKg.toLocaleString() }} kg
+          </el-descriptions-item>
+          <el-descriptions-item v-if="activeStorage" label="冷库余量">
+            <b :class="{ 'storage-over': activeStorage.freeKg <= 0 }">
+              {{ activeStorage.freeKg.toLocaleString() }} kg
+            </b>
+            （占用 {{ (activeStorage.usageRate * 100).toFixed(1) }}%）
+          </el-descriptions-item>
         </el-descriptions>
 
         <p class="dialog-sub">在港船舶</p>
@@ -259,5 +276,8 @@ function openPortDetail(): void {
 .free-berths__empty {
   font-size: 12px;
   color: #9aa9b6;
+}
+.storage-over {
+  color: #f56c6c;
 }
 </style>
