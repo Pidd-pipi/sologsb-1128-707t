@@ -4,8 +4,9 @@ import type { FishingPort } from '../../types/port';
 import type { Berth } from '../../types/berth';
 import { useAmapLoader } from '../../hooks/useAmapLoader';
 import { useBerthStatus } from '../../hooks/useBerthStatus';
+import { usePortStore } from '../../stores/portStore';
 import { boundsOf, gridLines, projectToGrid } from '../../utils/geo';
-import { percentText } from '../../utils/format';
+import { formatNumber } from '../../utils/format';
 
 const props = withDefaults(
   defineProps<{
@@ -35,6 +36,7 @@ const HEIGHT = 360;
 
 const berthRef = toRef(props, 'berths');
 const { summaryOf } = useBerthStatus(berthRef);
+const portStore = usePortStore();
 
 const bounds = computed(() => boundsOf(props.ports));
 const lines = computed(() => gridLines(bounds.value, 8, 5));
@@ -46,6 +48,7 @@ interface MapNode {
   rate: number;
   occupied: number;
   total: number;
+  freeStorageKg: number;
   focused: boolean;
 }
 
@@ -60,6 +63,7 @@ const nodes = computed<MapNode[]>(() =>
       rate: summary.occupancyRate,
       occupied: summary.occupied,
       total: summary.total,
+      freeStorageKg: portStore.storageSummary(port.id).freeKg,
       focused: port.id === props.focusedPortId,
     };
   }),
@@ -173,7 +177,7 @@ watch(
         <circle :cx="node.x" :cy="node.y" r="4.5" :fill="nodeColor(node.rate)" />
         <text :x="node.x" :y="node.y - 24" text-anchor="middle" class="map-panel__label">{{ node.port.name }}</text>
         <text :x="node.x" :y="node.y + 34" text-anchor="middle" class="map-panel__meta">
-          {{ node.occupied }}/{{ node.total }} 占用 {{ percentText(node.rate) }}
+          {{ node.occupied }}/{{ node.total }} 占用 · 冷库余 {{ formatNumber(node.freeStorageKg, 0) }}kg
         </text>
       </g>
       <text x="14" y="24" class="map-panel__caption">经纬网格（每格约 {{ ((bounds.maxLng - bounds.minLng) / 8).toFixed(2) }}° 经差）</text>

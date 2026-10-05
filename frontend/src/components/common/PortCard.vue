@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { supplyText, type FishingPort } from '../../types/port';
 import type { BerthSummary } from '../../types/berth';
+import { usePortStore } from '../../stores/portStore';
 import { formatNumber, percentText } from '../../utils/format';
 
 const props = defineProps<{
@@ -11,6 +12,10 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{ (e: 'open', portId: string): void }>();
+
+const portStore = usePortStore();
+/** 与渔港详情、地图摘要、渔船档案读同一份库存 */
+const storage = computed(() => portStore.storageSummary(props.port.id));
 
 const levelTagType = computed(() => {
   if (props.port.level === '中心渔港') return 'danger';
@@ -77,6 +82,18 @@ function onClick(): void {
       <span>在港船数 <b>{{ summary.inPortCount }}</b></span>
       <span>空闲泊位 <b>{{ summary.free }}</b></span>
       <span>维修泊位 <b>{{ summary.maintenance }}</b></span>
+    </div>
+
+    <div class="port-card__rate" data-testid="port-card-storage">
+      <span class="port-card__rate-label">
+        冷库余量 {{ formatNumber(storage.freeKg, 0) }} / {{ formatNumber(storage.capacityKg, 0) }} kg
+      </span>
+      <el-progress
+        :percentage="Number((storage.usageRate * 100).toFixed(1))"
+        :color="storage.usageRate >= 1 ? '#f56c6c' : progressColor"
+        :stroke-width="10"
+        :format="() => percentText(storage.usageRate)"
+      />
     </div>
 
     <div class="port-card__supply">

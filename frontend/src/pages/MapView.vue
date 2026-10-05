@@ -8,7 +8,7 @@ import { useBerthStatus } from '../hooks/useBerthStatus';
 import MapPanel from '../components/common/MapPanel.vue';
 import EmptyState from '../components/common/EmptyState.vue';
 import type { Berth } from '../types/berth';
-import { formatDateTime, percentText } from '../utils/format';
+import { formatDateTime, formatNumber, percentText } from '../utils/format';
 import { haversineKm } from '../utils/geo';
 
 const router = useRouter();
@@ -24,13 +24,15 @@ const activePortId = ref('');
 
 const activePort = computed(() => portStore.ports.find((p) => p.id === activePortId.value));
 const activeSummary = computed(() => (activePortId.value ? summaryOf(activePortId.value) : null));
+const activeStorage = computed(() => (activePortId.value ? portStore.storageSummary(activePortId.value) : null));
 const activeBerths = computed<Berth[]>(() => (activePortId.value ? portStore.berthsOf(activePortId.value) : []));
 
 const portRows = computed(() =>
   portStore.ports
     .map((port) => {
       const summary = summaryOf(port.id);
-      return { port, summary };
+      const storage = portStore.storageSummary(port.id);
+      return { port, summary, storage };
     })
     .sort((a, b) => b.summary.occupancyRate - a.summary.occupancyRate),
 );
@@ -125,7 +127,8 @@ function openPortDetail(): void {
                 :show-text="false"
               />
               <span class="rank-item__meta">
-                在港 {{ row.summary.inPortCount }} 艘 · 空闲 {{ row.summary.free }} 个泊位 · {{ row.port.level }}
+                在港 {{ row.summary.inPortCount }} 艘 · 空闲 {{ row.summary.free }} 个泊位 ·
+                冷库余 {{ formatNumber(row.storage.freeKg, 0) }}kg · {{ row.port.level }}
               </span>
             </div>
           </div>
@@ -145,6 +148,15 @@ function openPortDetail(): void {
             {{ activeSummary.occupied }} / {{ activeSummary.free }}
           </el-descriptions-item>
           <el-descriptions-item label="维修泊位">{{ activeSummary.maintenance }}</el-descriptions-item>
+          <el-descriptions-item label="冷库容量">
+            {{ activeStorage ? formatNumber(activeStorage.capacityKg, 0) : '—' }} kg
+          </el-descriptions-item>
+          <el-descriptions-item label="冷库余量">
+            <b :class="{ 'gap-text': activeStorage && activeStorage.freeKg <= 0 }">
+              {{ activeStorage ? formatNumber(activeStorage.freeKg, 0) : '—' }} kg
+            </b>
+            <span class="storage-sub">（已占 {{ activeStorage ? formatNumber(activeStorage.occupiedKg, 0) : '—' }} kg）</span>
+          </el-descriptions-item>
         </el-descriptions>
 
         <p class="dialog-sub">在港船舶</p>
@@ -259,5 +271,14 @@ function openPortDetail(): void {
 .free-berths__empty {
   font-size: 12px;
   color: #9aa9b6;
+}
+.gap-text {
+  color: #f56c6c;
+}
+.storage-sub {
+  margin-left: 6px;
+  font-size: 12px;
+  color: #9aa9b6;
+  font-weight: normal;
 }
 </style>

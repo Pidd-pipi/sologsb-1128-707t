@@ -15,6 +15,11 @@ export interface PortCall {
   vesselId: string;
   /** 渔船名（冗余，便于流水展示） */
   vesselName: string;
+  /**
+   * 所属渔港 id。旧流水可能没有港口归属，
+   * 这类记录不参与冷库占用，由流水页列为「待盘点」。
+   */
+  portId?: string;
   /** 类型：进港 / 出港 */
   type: CallType;
   /** 时间（ISO 字符串） */
@@ -25,8 +30,10 @@ export interface PortCall {
   iceKg: number;
   /** 加油 L */
   fuelL: number;
-  /** 卸货量 kg */
+  /** 卸货量 kg（进港并已占用冷库时等于入库批次量） */
   unloadKg: number;
+  /** 进港卸货生成的冷库批次 id；未占用冷库（无港口归属 / 卸货量为 0）时为空 */
+  storageBatchId?: string;
   /** 签证状态 */
   visaStatus: VisaStatus;
   createdAt: string;

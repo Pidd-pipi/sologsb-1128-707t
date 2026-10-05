@@ -6,6 +6,7 @@ import { usePortStore } from '../stores/portStore';
 import VesselSpecTable from '../components/common/VesselSpecTable.vue';
 import EmptyState from '../components/common/EmptyState.vue';
 import type { PortCall } from '../types/call';
+import type { StorageBatch } from '../types/storage';
 import { daysUntilExpiry, expiryText, powerTier, tonnageTier } from '../utils/tonnage';
 import { formatDateTime, formatNumber } from '../utils/format';
 
@@ -19,6 +20,17 @@ const vessel = computed(() => vesselStore.vesselById(vesselId.value));
 const loaded = ref(false);
 
 const calls = computed<PortCall[]>(() => (vessel.value ? portStore.callsOfVessel(vessel.value.id) : []));
+
+/** 该船在各渔港冷库中尚未提走的货（与渔港详情 / 地图读同一份库存） */
+const storedBatches = computed<StorageBatch[]>(() =>
+  vessel.value
+    ? portStore.batches
+        .filter((b) => b.vesselId === vessel.value!.id && b.remainingKg > 0)
+        .sort((a, b) => new Date(b.storedAt).getTime() - new Date(a.storedAt).getTime())
+    : [],
+);
+
+const storedTotalKg = computed(() => storedBatches.value.reduce((sum, b) => sum + b.remainingKg, 0));
 
 const occupancy = computed(() => {
   if (!vessel.value) return [] as Array<{ portName: string; berthNo: string; berthAt: string | null }>;
@@ -119,6 +131,27 @@ watch(vesselId, bootstrap);
               </el-table-column>
             </el-table>
           </el-card>
+
+          <el-card shadow="never" class="detail-card" data-testid="vessel-storage-card">
+            <template #header><span class="card-title">冷库在库（{{ storedBatches.length }} 批）</span></template>
+            <el-table :data="storedBatches" size="small" border empty-text="该船没有尚未提走的冷库货物">
+              <el-table-column prop="portName" label="冷库渔港" min-width="120" />
+              <el-table-column label="入库时间" min-width="150">
+                <template #default="scope">{{ formatDateTime(scope.row.storedAt) }}</template>
+              </el-table-column>
+              <el-table-column label="剩余 kg" min-width="100">
+                <template #default="scope">
+                  <b>{{ formatNumber(scope.row.remainingKg, 0) }}</b>
+                </template>
+              </el-table-column>
+              <el-table-column label="已提 kg" min-width="90">
+                <template #default="scope">{{ formatNumber(scope.row.pickedKg, 0) }}</template>
+              </el-table-column>
+            </el-table>
+            <p v-if="storedBatches.length" class="storage-total">
+              在库合计 <b>{{ formatNumber(storedTotalKg, 0) }} kg</b>，出港不会自动释放，须办理提货出库。
+            </p>
+          </el-card>
         </el-col>
       </el-row>
 
@@ -134,10 +167,15 @@ watch(vesselId, bootstrap);
           >
             <div class="timeline-row">
               <el-tag size="small" :type="call.type === '进港' ? 'primary' : 'success'">{{ call.type }}</el-tag>
+              <el-tag v-if="call.portId" size="small" type="info" effect="plain">
+                {{ portStore.portById(call.portId)?.name ?? call.portId }}
+              </el-tag>
+              <el-tag v-else size="small" type="warning" effect="dark" data-testid="pending-tag">待盘点</el-tag>
               <span>泊位 {{ call.berthNo }}</span>
               <span>加冰 {{ formatNumber(call.iceKg, 0) }} kg</span>
               <span>加油 {{ formatNumber(call.fuelL, 0) }} L</span>
               <span>卸货 {{ formatNumber(call.unloadKg, 0) }} kg</span>
+              <el-tag v-if="call.storageBatchId" size="small" type="success" effect="plain">已入冷库</el-tag>
               <el-tag size="small" type="info" effect="plain">{{ call.visaStatus }}</el-tag>
             </div>
           </el-timeline-item>
@@ -197,5 +235,13 @@ watch(vesselId, bootstrap);
   flex-wrap: wrap;
   font-size: 13px;
   color: #4b5c6d;
+}
+.storage-total {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: #6b7c8c;
+}
+.storage-total b {
+  color: #17324d;
 }
 </style>

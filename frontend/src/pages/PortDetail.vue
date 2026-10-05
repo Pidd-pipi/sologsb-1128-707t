@@ -10,6 +10,7 @@ import BerthGrid from '../components/common/BerthGrid.vue';
 import MapPanel from '../components/common/MapPanel.vue';
 import EmptyState from '../components/common/EmptyState.vue';
 import type { Berth } from '../types/berth';
+import type { StorageBatch } from '../types/storage';
 import { formatDateTime, formatNumber, percentText } from '../utils/format';
 import { supplyText } from '../types/port';
 
@@ -24,6 +25,45 @@ const berthsRef = computed(() => portStore.berths);
 const { summary, summaryOf, inPortVessels } = useBerthStatus(berthsRef, portId);
 const portBerths = computed(() => portStore.berthsOf(portId.value));
 
+/** 与地图摘要、渔船档案读同一份库存缓存（liveQuery 保证多标签页一致） */
+const storage = computed(() => portStore.storageSummary(portId.value));
+const batches = computed<StorageBatch[]>(() => portStore.batchesOfPort(portId.value));
+const activeBatches = computed(() => batches.value.filter((b) => b.remainingKg > 0));
+
+const pickupVisible = ref(false);
+const pickupSubmitting = ref(false);
+const pickupBatch = ref<StorageBatch | null>(null);
+const pickupQty = ref(0);
+const pickupError = ref('');
+
+function openPickup(batch: StorageBatch): void {
+  pickupBatch.value = batch;
+  pickupQty.value = batch.remainingKg;
+  pickupError.value = '';
+  pickupVisible.value = true;
+}
+
+async function submitPickup(): Promise<void> {
+  if (!pickupBatch.value) return;
+  pickupSubmitting.value = true;
+  pickupError.value = '';
+  try {
+    const result = await portStore.pickup(pickupBatch.value.id, pickupQty.value);
+    if (result.status !== 'success') {
+      pickupError.value = result.shortageKg
+        ? `${result.message}（缺口 ${formatNumber(result.shortageKg, 0)} kg）`
+        : result.message;
+      return;
+    }
+    ElMessage.success(
+      `提货 ${formatNumber(result.pickup.quantityKg, 0)} kg，冷库余量恢复至 ${formatNumber(result.summary.freeKg, 0)} kg`,
+    );
+    pickupVisible.value = false;
+  } finally {
+    pickupSubmitting.value = false;
+  }
+}
+
 const activeBerthId = ref('');
 const berthDialogVisible = ref(false);
 const activeBerth = computed<Berth | null>(
@@ -36,10 +76,8 @@ const activeVessel = computed(() =>
 const addBerthVisible = ref(false);
 const addBerthForm = reactive({ berthNo: '', designDepth: 4.5 });
 
-const recentCalls = computed(() => {
-  const numbers = new Set(portBerths.value.map((b) => b.berthNo));
-  return portStore.callsSorted.filter((c) => numbers.has(c.berthNo)).slice(0, 8);
-});
+/** 近日流水严格按港口归属过滤（旧流水没有 portId 不会混进来） */
+const recentCalls = computed(() => portStore.callsOfPort(portId.value).slice(0, 8));
 
 const supply = computed(() => (port.value ? supplyText(port.value.supply) : '—'));
 
@@ -135,9 +173,17 @@ function onMapSelect(selectedPortId: string): void {
               <el-descriptions-item label="码头长度">{{ formatNumber(port.wharfLength, 0) }} m</el-descriptions-item>
               <el-descriptions-item label="避风能力">{{ port.shelterLevel }} 级</el-descriptions-item>
               <el-descriptions-item label="补给能力">{{ supply }}</el-descriptions-item>
+              <el-descriptions-item label="冷库容量">
+                {{ formatNumber(port.coldStorageKg, 0) }} kg
+              </el-descriptions-item>
             </el-descriptions>
             <p class="detail-hint">
               当前占用率 {{ percentText(summary.occupancyRate) }}（占用 {{ summary.occupied }} / 空闲 {{ summary.free }} / 维修 {{ summary.maintenance }}）
+            </p>
+            <p class="detail-hint" data-testid="port-storage-line">
+              冷库占用 {{ formatNumber(storage.occupiedKg, 0) }} / {{ formatNumber(storage.capacityKg, 0) }} kg ·
+              余量 <b :class="{ 'gap-text': storage.freeKg <= 0 }">{{ formatNumber(storage.freeKg, 0) }} kg</b> ·
+              在库批次 {{ storage.batchCount }} 个
             </p>
           </el-card>
         </el-col>
@@ -164,6 +210,50 @@ function onMapSelect(selectedPortId: string): void {
         <EmptyState v-else title="该渔港暂无泊位记录" description="点击右上角「新增泊位」为该渔港建立泊位清单。">
           <el-button type="primary" @click="addBerthVisible = true">新增泊位</el-button>
         </EmptyState>
+      </el-card>
+
+      <el-card shadow="never" class="detail-card" data-testid="cold-storage-card">
+        <template #header>
+          <span class="card-title">冷库库存（按进港批次）</span>
+        </template>
+        <el-progress
+          :percentage="Number((storage.usageRate * 100).toFixed(1))"
+          :stroke-width="14"
+          :status="storage.usageRate >= 1 ? 'exception' : storage.usageRate >= 0.9 ? 'warning' : ''"
+        />
+        <div class="storage-stat-row">
+          <span>容量 <b>{{ formatNumber(storage.capacityKg, 0) }} kg</b></span>
+          <span>在库 <b>{{ formatNumber(storage.occupiedKg, 0) }} kg</b></span>
+          <span>余量 <b :class="{ 'gap-text': storage.freeKg <= 0 }">{{ formatNumber(storage.freeKg, 0) }} kg</b></span>
+        </div>
+        <el-table :data="activeBatches" size="small" border empty-text="冷库当前无在库批次（待盘点旧流水不占容量）" class="storage-table">
+          <el-table-column prop="vesselName" label="渔船" min-width="120" />
+          <el-table-column label="入库时间" min-width="150">
+            <template #default="scope">{{ formatDateTime(scope.row.storedAt) }}</template>
+          </el-table-column>
+          <el-table-column label="入库 kg" width="100">
+            <template #default="scope">{{ formatNumber(scope.row.totalKg, 0) }}</template>
+          </el-table-column>
+          <el-table-column label="剩余 kg" width="100">
+            <template #default="scope">
+              <b>{{ formatNumber(scope.row.remainingKg, 0) }}</b>
+            </template>
+          </el-table-column>
+          <el-table-column label="已提 kg" width="100">
+            <template #default="scope">{{ formatNumber(scope.row.pickedKg, 0) }}</template>
+          </el-table-column>
+          <el-table-column label="最近提货" min-width="150">
+            <template #default="scope">{{ formatDateTime(scope.row.lastPickupAt) }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="110">
+            <template #default="scope">
+              <el-button text type="primary" size="small" data-testid="pickup-btn" @click="openPickup(scope.row)">
+                提货出库
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <p class="detail-hint">提货按批次扣减并立即释放容量；出港只结束航次，不会清掉这里尚未提走的货。</p>
       </el-card>
 
       <el-row :gutter="16">
@@ -269,6 +359,37 @@ function onMapSelect(selectedPortId: string): void {
         <el-button type="primary" data-testid="submit-berth" @click="submitBerth">保存泊位</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="pickupVisible" title="渔船提货出库" width="460px" data-testid="pickup-dialog">
+      <template v-if="pickupBatch">
+        <el-descriptions :column="1" size="small" border>
+          <el-descriptions-item label="渔船">{{ pickupBatch.vesselName }}</el-descriptions-item>
+          <el-descriptions-item label="入库时间">{{ formatDateTime(pickupBatch.storedAt) }}</el-descriptions-item>
+          <el-descriptions-item label="批次剩余">
+            {{ formatNumber(pickupBatch.remainingKg, 0) }} kg（入库 {{ formatNumber(pickupBatch.totalKg, 0) }} kg，已提 {{ formatNumber(pickupBatch.pickedKg, 0) }} kg）
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-form label-width="100px" style="margin-top: 12px">
+          <el-form-item label="提货量 kg">
+            <el-input-number
+              v-model="pickupQty"
+              :min="1"
+              :max="pickupBatch.remainingKg"
+              :step="100"
+              style="width: 100%"
+              data-testid="pickup-qty"
+            />
+          </el-form-item>
+        </el-form>
+        <el-alert v-if="pickupError" type="error" show-icon :closable="false" :title="pickupError" />
+      </template>
+      <template #footer>
+        <el-button @click="pickupVisible = false">取消</el-button>
+        <el-button type="primary" :loading="pickupSubmitting" data-testid="submit-pickup" @click="submitPickup">
+          确认提货并释放容量
+        </el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -311,5 +432,22 @@ function onMapSelect(selectedPortId: string): void {
   margin: 10px 0 0;
   font-size: 12px;
   color: #6b7c8c;
+}
+.gap-text {
+  color: #f56c6c;
+}
+.storage-stat-row {
+  display: flex;
+  gap: 20px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #5b6b7b;
+  flex-wrap: wrap;
+}
+.storage-stat-row b {
+  color: #17324d;
+}
+.storage-table {
+  margin-top: 12px;
 }
 </style>

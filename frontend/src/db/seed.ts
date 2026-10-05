@@ -13,6 +13,9 @@ function daysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
 }
 
+/** 新登记渔港 / 旧数据迁移时的默认冷库容量 kg */
+export const DEFAULT_COLD_STORAGE_KG = 20000;
+
 /** 初始渔港 */
 export const SEED_PORTS: FishingPort[] = [
   {
@@ -26,6 +29,7 @@ export const SEED_PORTS: FishingPort[] = [
     wharfLength: 420,
     shelterLevel: 12,
     supply: { fuel: true, ice: true, water: true },
+    coldStorageKg: 30000,
     manager: '象山县渔港管理站',
     createdAt: daysAgo(420),
   },
@@ -40,6 +44,7 @@ export const SEED_PORTS: FishingPort[] = [
     wharfLength: 680,
     shelterLevel: 11,
     supply: { fuel: true, ice: true, water: false },
+    coldStorageKg: 40000,
     manager: '普陀区渔港服务中心',
     createdAt: daysAgo(365),
   },
@@ -54,6 +59,7 @@ export const SEED_PORTS: FishingPort[] = [
     wharfLength: 300,
     shelterLevel: 10,
     supply: { fuel: false, ice: true, water: true },
+    coldStorageKg: 15000,
     manager: '岱山县渔业合作社',
     createdAt: daysAgo(280),
   },
@@ -68,6 +74,7 @@ export const SEED_PORTS: FishingPort[] = [
     wharfLength: 210,
     shelterLevel: 9,
     supply: { fuel: false, ice: false, water: true },
+    coldStorageKg: 8000,
     manager: '温岭市石塘镇渔业服务站',
     createdAt: daysAgo(150),
   },

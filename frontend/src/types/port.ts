@@ -31,6 +31,8 @@ export interface FishingPort {
   shelterLevel: number;
   /** 补给能力 */
   supply: SupplyCapability;
+  /** 冷库容量 kg */
+  coldStorageKg: number;
   /** 管理单位 */
   manager: string;
   createdAt: string;
